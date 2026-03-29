@@ -162,8 +162,9 @@ def run_best_response_dynamics(
     move_count = 0
 
     for _ in range(max_steps):
-        # Keep utility evaluation explicit to reflect textbook utility usage.
-        _ = [utility_for_node(i, state, l_sets, alpha) for i in range(graph.n)]
+        # utility_for_node() is available for inspection/debugging purposes;
+        # the best_response() rule derives BR directly without requiring explicit
+        # utility values, so no per-step utility sweep is needed here.
 
         improvable_nodes = [
             i for i in range(graph.n) if state[i] != best_response(i, state, l_sets)
@@ -502,6 +503,8 @@ def run_problem2_dynamics(
 
     for _ in range(max_steps):
         improvable_nodes: list[int] = []
+        br_map: dict[int, int] = {}
+
         for i in range(graph.n):
             br_i = best_response_problem2(
                 graph=graph,
@@ -513,6 +516,7 @@ def run_problem2_dynamics(
                 closed_neighbors=closed_neighbors,
                 rng=rng,
             )
+            br_map[i] = br_i
             if br_i != state[i]:
                 improvable_nodes.append(i)
 
@@ -520,34 +524,331 @@ def run_problem2_dynamics(
             return state, move_count, cardinality(state), True
 
         chosen_i = rng.choice(improvable_nodes)
-        state[chosen_i] = best_response_problem2(
-            graph=graph,
-            state=state,
-            i=chosen_i,
-            alpha=alpha,
-            beta=beta,
-            gamma=gamma,
-            closed_neighbors=closed_neighbors,
-            rng=rng,
-        )
+        # Use the cached BR to avoid re-invoking random tie-breaking a second time,
+        # which could yield a different result and cause a phantom move_count increment.
+        state[chosen_i] = br_map[chosen_i]
         move_count += 1
 
     return state, move_count, cardinality(state), False
 
 
-def solve_maximal_matching(graph: Graph) -> SolverResult:
-    """Skeleton solver for Requirement 2: Matching Game.
+def is_mutually_matched(state: Sequence[Optional[int]], i: int) -> bool:
+    """Return True if player i is in a mutual proposal pair."""
+    if not (0 <= i < len(state)):
+        return False
 
-    TODO(student): clarify if assignment asks for maximal or maximum matching
-    strategy in this game context, then implement corresponding game solver.
+    partner = state[i]
+    if partner is None:
+        return False
+    if not (0 <= partner < len(state)):
+        return False
+    return state[partner] == i
+
+
+def matched_partner(state: Sequence[Optional[int]], i: int) -> Optional[int]:
+    """Return i's matched partner if mutual, otherwise None."""
+    if is_mutually_matched(state, i):
+        return state[i]
+    return None
+
+
+def utility_problem3(graph: Graph, state: Sequence[Optional[int]], i: int) -> float:
+    """Compute utility for player i under the matching-game design.
+
+    Utility rule:
+    - choose None => 0
+    - choose j and state[j] == i => 3 + bias(j)
+    - choose j and state[j] is None => 1 + bias(j)
+    - otherwise => -1 + bias(j)
+
+    bias(j) = 1 / (1 + degree(j))
     """
-    _ = graph
-    return SolverResult(
-        cardinality=-1,
-        move_count=None,
-        state={"status": "placeholder", "game": "Matching Game"},
-        is_valid=False,
-    )
+    strategy = state[i]
+    if strategy is None:
+        return 0.0
+
+    if not (0 <= strategy < graph.n):
+        return -1.0
+    if not graph.is_edge(i, strategy):
+        return -1.0
+
+    neighbor = strategy
+    bias = 1.0 / (1.0 + graph.degree(neighbor))
+
+    if state[neighbor] == i:
+        return 3.0 + bias
+    if state[neighbor] is None:
+        return 1.0 + bias
+    return -1.0 + bias
+
+
+def best_response_problem3(
+    graph: Graph,
+    state: Sequence[Optional[int]],
+    i: int,
+    rng: random.Random,
+) -> Optional[int]:
+    """Compute best response for Problem 3 by utility enumeration.
+
+    Tie-breaking among max-utility strategies:
+    1) prefer smaller-degree neighbor,
+    2) if still tie, random,
+    3) None is included as a valid strategy.
+    """
+    candidate_strategies: list[Optional[int]] = [None, *graph.neighbors(i)]
+    utilities: dict[Optional[int], float] = {}
+
+    for strategy in candidate_strategies:
+        trial_state = list(state)
+        trial_state[i] = strategy
+        utilities[strategy] = utility_problem3(graph, trial_state, i)
+
+    best_utility = max(utilities.values())
+    best_candidates = [strategy for strategy in candidate_strategies if utilities[strategy] == best_utility]
+
+    neighbor_candidates = [strategy for strategy in best_candidates if strategy is not None]
+    if neighbor_candidates:
+        min_degree = min(graph.degree(strategy) for strategy in neighbor_candidates)
+        degree_tied = [strategy for strategy in neighbor_candidates if graph.degree(strategy) == min_degree]
+        return rng.choice(degree_tied)
+
+    return rng.choice(best_candidates)
+
+
+def compute_matching_edges(state: Sequence[Optional[int]]) -> set[tuple[int, int]]:
+    """Build undirected matching edge set from a proposal state.
+
+    Only mutual proposals create matched edges.
+    """
+    edges: set[tuple[int, int]] = set()
+    for i in range(len(state)):
+        j = matched_partner(state, i)
+        if j is None:
+            continue
+        u, v = (i, j) if i < j else (j, i)
+        edges.add((u, v))
+    return edges
+
+
+def matching_cardinality(state: Sequence[Optional[int]]) -> int:
+    """Return number of matched pairs (not matched vertices)."""
+    return len(compute_matching_edges(state))
+
+
+def is_valid_matching_state(graph: Graph, state: Sequence[Optional[int]]) -> bool:
+    """Check if a proposal state corresponds to a legal matching."""
+    if len(state) != graph.n:
+        return False
+
+    for i, choice in enumerate(state):
+        if choice is None:
+            continue
+        if not (0 <= choice < graph.n):
+            return False
+        if choice == i:
+            return False
+        if not graph.is_edge(i, choice):
+            return False
+
+    edges = compute_matching_edges(state)
+    used_vertices: set[int] = set()
+    for u, v in edges:
+        if u in used_vertices or v in used_vertices:
+            return False
+        # Treat matching edges as undirected graph edges.
+        if not graph.is_edge(u, v) or not graph.is_edge(v, u):
+            return False
+        used_vertices.add(u)
+        used_vertices.add(v)
+
+    return True
+
+
+def is_maximal_matching_state(graph: Graph, state: Sequence[Optional[int]]) -> bool:
+    """Check if matching induced by state is maximal."""
+    if not is_valid_matching_state(graph, state):
+        return False
+
+    edges = compute_matching_edges(state)
+    matched_vertices: set[int] = set()
+    for u, v in edges:
+        matched_vertices.add(u)
+        matched_vertices.add(v)
+
+    for u in range(graph.n):
+        for v in range(u + 1, graph.n):
+            if not graph.is_edge(u, v) or not graph.is_edge(v, u):
+                continue
+            if u in matched_vertices or v in matched_vertices:
+                continue
+            # Found an uncovered edge; we can add it, so current matching is not maximal.
+            return False
+
+    return True
+
+
+def _random_problem3_state(graph: Graph, rng: random.Random, none_probability: float) -> list[Optional[int]]:
+    """Generate one random proposal state for Problem 3."""
+    state: list[Optional[int]] = []
+    for i in range(graph.n):
+        neighbors = graph.neighbors(i)
+        if not neighbors:
+            state.append(None)
+            continue
+
+        if rng.random() < none_probability:
+            state.append(None)
+        else:
+            state.append(rng.choice(neighbors))
+    return state
+
+
+def generate_problem3_initial_states(
+    graph: Graph,
+    rng: random.Random,
+    random_start_count: int,
+) -> list[list[Optional[int]]]:
+    """Build diverse initial states for Problem 3 multi-start search."""
+    starts: list[list[Optional[int]]] = []
+
+    # Deterministic anchor: everyone chooses null.
+    starts.append([None for _ in range(graph.n)])
+
+    # Random mixed starts: None/proposal at equal chance.
+    mixed_count = max(1, random_start_count // 2)
+    for _ in range(mixed_count):
+        starts.append(_random_problem3_state(graph, rng, none_probability=0.5))
+
+    # Bias toward more None.
+    sparse_count = max(1, random_start_count // 4)
+    for _ in range(sparse_count):
+        starts.append(_random_problem3_state(graph, rng, none_probability=0.75))
+
+    # Bias toward more proposals.
+    dense_count = max(1, random_start_count - mixed_count - sparse_count)
+    for _ in range(dense_count):
+        starts.append(_random_problem3_state(graph, rng, none_probability=0.2))
+
+    return starts
+
+
+def run_problem3_dynamics(
+    graph: Graph,
+    initial_state: Sequence[Optional[int]],
+    rng: random.Random,
+    max_steps: int,
+) -> tuple[list[Optional[int]], int, bool]:
+    """Run asynchronous best-response dynamics for Problem 3.
+
+    Update-order heuristic among improvable players:
+    1) prioritize currently unmatched players,
+    2) among them prioritize smaller degree,
+    3) random tie-break.
+    """
+    state = list(initial_state)
+    move_count = 0
+
+    for _ in range(max_steps):
+        improvable_nodes: list[int] = []
+        br_map: dict[int, Optional[int]] = {}
+
+        for i in range(graph.n):
+            br_i = best_response_problem3(graph=graph, state=state, i=i, rng=rng)
+            br_map[i] = br_i
+            if br_i != state[i]:
+                improvable_nodes.append(i)
+
+        if not improvable_nodes:
+            return state, move_count, True
+
+        unmatched_improvable = [i for i in improvable_nodes if not is_mutually_matched(state, i)]
+        candidate_nodes = unmatched_improvable if unmatched_improvable else improvable_nodes
+
+        min_degree = min(graph.degree(i) for i in candidate_nodes)
+        degree_tied = [i for i in candidate_nodes if graph.degree(i) == min_degree]
+        chosen_i = rng.choice(degree_tied)
+
+        state[chosen_i] = br_map[chosen_i]
+        move_count += 1
+
+    return state, move_count, False
+
+
+def solve_maximal_matching(graph: Graph) -> SolverResult:
+    """Solver for Requirement 2: Matching Game / Maximal Matching.
+
+    This implementation keeps the game-theoretic structure:
+    players repeatedly update to utility-maximizing best responses.
+    Multi-start execution is used to improve the chance of finding larger
+    maximal matchings, and the returned extremum is the maximum cardinality
+    among valid maximal candidates.
+    """
+    rng = random.Random()
+    random_start_count = max(24, 3 * graph.n)
+    max_steps = max(1000, 80 * graph.n * graph.n)
+    initial_states = generate_problem3_initial_states(graph, rng, random_start_count)
+
+    best_valid_maximal: Optional[SolverResult] = None
+    fallback: Optional[SolverResult] = None
+
+    for start in initial_states:
+        final_state, moves, converged = run_problem3_dynamics(
+            graph=graph,
+            initial_state=start,
+            rng=rng,
+            max_steps=max_steps,
+        )
+
+        is_valid = is_valid_matching_state(graph, final_state)
+        is_maximal = is_maximal_matching_state(graph, final_state) if is_valid else False
+        final_cardinality = matching_cardinality(final_state)
+        matching_edges = sorted(compute_matching_edges(final_state))
+
+        candidate = SolverResult(
+            cardinality=final_cardinality,
+            move_count=moves,
+            state={
+                "strategy_state": final_state,
+                "matching_edges": matching_edges,
+                "converged": converged,
+                "starts": len(initial_states),
+                "is_maximal": is_maximal,
+            },
+            is_valid=is_valid,
+        )
+
+        if fallback is None or candidate.cardinality > fallback.cardinality:
+            fallback = candidate
+
+        if not (is_valid and is_maximal):
+            continue
+
+        if best_valid_maximal is None:
+            best_valid_maximal = candidate
+            continue
+
+        if candidate.cardinality > best_valid_maximal.cardinality:
+            best_valid_maximal = candidate
+        elif candidate.cardinality == best_valid_maximal.cardinality:
+            best_valid_maximal = rng.choice([best_valid_maximal, candidate])
+
+    if best_valid_maximal is not None:
+        return best_valid_maximal
+
+    if fallback is None:
+        return SolverResult(
+            cardinality=-1,
+            move_count=None,
+            state={
+                "strategy_state": [None for _ in range(graph.n)],
+                "matching_edges": [],
+                "converged": False,
+                "starts": 0,
+                "is_maximal": False,
+            },
+            is_valid=False,
+        )
+    return fallback
 
 
 def pretty_print_results(ans1: int, ans2: int, ans3: int) -> None:
