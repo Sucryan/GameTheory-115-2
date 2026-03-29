@@ -296,18 +296,243 @@ def solve_mis_based_ids(graph: Graph) -> SolverResult:
 
 
 def solve_symmetric_mds_based_ids(graph: Graph) -> SolverResult:
-    """Skeleton solver for Requirement 1-2: Symmetric MDS-based IDS Game.
+    """Solver for Requirement 1-2: Symmetric MDS-based IDS Game.
 
-    TODO(student): implement complete solver with mathematically correct
-    dominance/game-state transitions according to HW1 definition.
+    This implementation follows the textbook definitions directly:
+    - M_i = N_i U {i}
+    - v_i(C) = sum(c_j for j in M_i)
+    - g_i(C) = alpha if v_i(C) == 1 else 0
+    - w_i(C) = sum(c_i * c_j * gamma for j in N_i)
+    - u_i(C):
+        if c_i == 1:
+            sum(g_j(C) for j in M_i) - beta - w_i(C)
+        else:
+            0
+
+    Best response is computed by explicitly comparing utility under c_i=0 and
+    c_i=1, with random tie-breaking.
     """
-    _ = graph
-    return SolverResult(
-        cardinality=2,
-        move_count=None,
-        state={"status": "placeholder", "game": "Symmetric MDS-based IDS"},
-        is_valid=True,
-    )
+    alpha = 2.0
+    beta = 1.0
+    gamma = graph.n * alpha + 1.0
+    num_restarts = max(16, 2 * graph.n)
+    max_steps = max(1000, 50 * graph.n * graph.n)
+    seed: Optional[int] = None
+
+    # Keep constraints explicit to avoid silently violating textbook setup.
+    if alpha <= 1.0:
+        raise ValueError(f"alpha must satisfy alpha > 1, got {alpha}")
+    if not (0.0 < beta < alpha):
+        raise ValueError(f"beta must satisfy 0 < beta < alpha, got beta={beta}, alpha={alpha}")
+    if gamma <= graph.n * alpha:
+        raise ValueError(
+            f"gamma must satisfy gamma > n * alpha, got gamma={gamma}, n={graph.n}, alpha={alpha}"
+        )
+
+    rng = random.Random(seed)
+    closed_neighbors = build_closed_neighborhoods(graph)
+    initial_states = generate_initial_states(graph.n, rng, num_restarts)
+
+    best_valid: Optional[SolverResult] = None
+    fallback: Optional[SolverResult] = None
+
+    for start in initial_states:
+        final_state, moves, final_cardinality, converged = run_problem2_dynamics(
+            graph=graph,
+            initial_state=start,
+            alpha=alpha,
+            beta=beta,
+            gamma=gamma,
+            closed_neighbors=closed_neighbors,
+            rng=rng,
+            max_steps=max_steps,
+        )
+
+        is_valid = converged and is_independent_dominating_set(graph, final_state)
+        candidate = SolverResult(
+            cardinality=final_cardinality,
+            move_count=moves,
+            state={
+                "bit_vector": final_state,
+                "converged": converged,
+                "alpha": alpha,
+                "beta": beta,
+                "gamma": gamma,
+                "starts": len(initial_states),
+            },
+            is_valid=is_valid,
+        )
+
+        if fallback is None or candidate.cardinality < fallback.cardinality:
+            fallback = candidate
+
+        if not is_valid:
+            # Keep invalid outcomes for debugging/report analysis.
+            continue
+
+        if best_valid is None:
+            best_valid = candidate
+            continue
+
+        if candidate.cardinality < best_valid.cardinality:
+            best_valid = candidate
+        elif candidate.cardinality == best_valid.cardinality:
+            best_valid = rng.choice([best_valid, candidate])
+
+    if best_valid is not None:
+        return best_valid
+
+    # Defensive fallback if no converged valid IDS is found.
+    if fallback is None:
+        return SolverResult(
+            cardinality=graph.n,
+            move_count=None,
+            state={
+                "bit_vector": [1] * graph.n,
+                "converged": False,
+                "alpha": alpha,
+                "beta": beta,
+                "gamma": gamma,
+                "starts": 0,
+            },
+            is_valid=False,
+        )
+    return fallback
+
+
+def build_closed_neighborhoods(graph: Graph) -> list[set[int]]:
+    """Build M_i for each node i, where M_i = N_i U {i}."""
+    closed_neighbors: list[set[int]] = []
+    for i in range(graph.n):
+        m_i = set(graph.neighbors(i))
+        m_i.add(i)
+        closed_neighbors.append(m_i)
+    return closed_neighbors
+
+
+def domination_count(state: Sequence[int], closed_neighbors: Sequence[set[int]], i: int) -> int:
+    """Compute v_i(C) = sum(c_j for j in M_i)."""
+    return sum(state[j] for j in closed_neighbors[i])
+
+
+def domination_gain(state: Sequence[int], closed_neighbors: Sequence[set[int]], i: int, alpha: float) -> float:
+    """Compute g_i(C) from textbook definition.
+
+    g_i(C) = alpha if v_i(C) == 1 else 0
+    """
+    return alpha if domination_count(state, closed_neighbors, i) == 1 else 0.0
+
+
+def independence_penalty(graph: Graph, state: Sequence[int], i: int, gamma: float) -> float:
+    """Compute w_i(C) = sum(c_i * c_j * gamma for j in N_i)."""
+    c_i = state[i]
+    return sum(c_i * state[j] * gamma for j in graph.neighbors(i))
+
+
+def utility_problem2(
+    graph: Graph,
+    state: Sequence[int],
+    i: int,
+    alpha: float,
+    beta: float,
+    gamma: float,
+    closed_neighbors: Sequence[set[int]],
+) -> float:
+    """Compute u_i(C) exactly for Problem 2.
+
+    If c_i == 1:
+      u_i(C) = sum(g_j(C) for j in M_i) - beta - w_i(C)
+    If c_i == 0:
+      u_i(C) = 0
+    """
+    if state[i] == 0:
+        return 0.0
+
+    gain_sum = sum(domination_gain(state, closed_neighbors, j, alpha) for j in closed_neighbors[i])
+    penalty = independence_penalty(graph, state, i, gamma)
+    return gain_sum - beta - penalty
+
+
+def best_response_problem2(
+    graph: Graph,
+    state: Sequence[int],
+    i: int,
+    alpha: float,
+    beta: float,
+    gamma: float,
+    closed_neighbors: Sequence[set[int]],
+    rng: random.Random,
+) -> int:
+    """Compute best response by direct utility comparison under c_i in {0,1}."""
+    trial_zero = list(state)
+    trial_one = list(state)
+    trial_zero[i] = 0
+    trial_one[i] = 1
+
+    utility_zero = utility_problem2(graph, trial_zero, i, alpha, beta, gamma, closed_neighbors)
+    utility_one = utility_problem2(graph, trial_one, i, alpha, beta, gamma, closed_neighbors)
+
+    if utility_one > utility_zero:
+        return 1
+    if utility_zero > utility_one:
+        return 0
+    return rng.choice([0, 1])
+
+
+def run_problem2_dynamics(
+    graph: Graph,
+    initial_state: Sequence[int],
+    alpha: float,
+    beta: float,
+    gamma: float,
+    closed_neighbors: Sequence[set[int]],
+    rng: random.Random,
+    max_steps: int,
+) -> tuple[list[int], int, int, bool]:
+    """Run asynchronous best-response dynamics for Problem 2.
+
+    Process:
+    - find all players whose current action differs from best response
+    - randomly select one such player
+    - update that player
+    - stop when no player wants to deviate
+    """
+    state = list(initial_state)
+    move_count = 0
+
+    for _ in range(max_steps):
+        improvable_nodes: list[int] = []
+        for i in range(graph.n):
+            br_i = best_response_problem2(
+                graph=graph,
+                state=state,
+                i=i,
+                alpha=alpha,
+                beta=beta,
+                gamma=gamma,
+                closed_neighbors=closed_neighbors,
+                rng=rng,
+            )
+            if br_i != state[i]:
+                improvable_nodes.append(i)
+
+        if not improvable_nodes:
+            return state, move_count, cardinality(state), True
+
+        chosen_i = rng.choice(improvable_nodes)
+        state[chosen_i] = best_response_problem2(
+            graph=graph,
+            state=state,
+            i=chosen_i,
+            alpha=alpha,
+            beta=beta,
+            gamma=gamma,
+            closed_neighbors=closed_neighbors,
+            rng=rng,
+        )
+        move_count += 1
+
+    return state, move_count, cardinality(state), False
 
 
 def solve_maximal_matching(graph: Graph) -> SolverResult:
@@ -318,10 +543,10 @@ def solve_maximal_matching(graph: Graph) -> SolverResult:
     """
     _ = graph
     return SolverResult(
-        cardinality=2,
+        cardinality=-1,
         move_count=None,
         state={"status": "placeholder", "game": "Matching Game"},
-        is_valid=True,
+        is_valid=False,
     )
 
 
