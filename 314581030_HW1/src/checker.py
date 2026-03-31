@@ -41,6 +41,8 @@ class BenchmarkPoint:
     ne_rate_problem1: float
     ne_rate_problem2: float
     ne_rate_problem3: float
+    avg_unmatched_p3: float
+    avg_unmatched_neighbor_p3: float
 
 
 @dataclass
@@ -60,6 +62,8 @@ class TrialMetrics:
     ne_problem1: bool
     ne_problem2: bool
     ne_problem3: bool
+    unmatched_count_p3: float
+    unmatched_neighbor_count_p3: float
 
 
 def load_main_module(main_path: Path) -> Any:
@@ -384,6 +388,28 @@ def is_maximal_matching(graph: Any, state: list[Optional[int]]) -> bool:
     return True
 
 
+def compute_unmatched_metrics(graph: Any, state: list[Optional[int]]) -> tuple[int, int]:
+    """Return (unmatched_count, unmatched_with_unmatched_neighbor_count).
+
+    unmatched_count: number of vertices not covered by any matching edge.
+    unmatched_with_unmatched_neighbor_count: among unmatched vertices, how many
+        have at least one neighbor that is also unmatched.  A non-zero value
+        indicates the matching is *not* maximal (an augmenting edge still exists).
+    """
+    edges = compute_matching_edges(state)
+    matched: set[int] = set()
+    for u, v in edges:
+        matched.add(u)
+        matched.add(v)
+
+    unmatched = [i for i in range(graph.n) if i not in matched]
+    unmatched_set = set(unmatched)
+    unmatched_with_unmatched_neighbor = sum(
+        1 for u in unmatched if any(v in unmatched_set for v in graph.neighbors(u))
+    )
+    return len(unmatched), unmatched_with_unmatched_neighbor
+
+
 def _utility_problem3_for_strategy(
     graph: Any,
     state: list[Optional[int]],
@@ -474,6 +500,7 @@ def run_single_trial(
     ne3 = is_ne_problem3(graph, state3)
 
     card3 = float(len(compute_matching_edges(state3)))
+    unmatched_count, unmatched_nb_count = compute_unmatched_metrics(graph, state3)
 
     return TrialMetrics(
         cardinality_problem1=float(sum(state1)),
@@ -489,6 +516,8 @@ def run_single_trial(
         ne_problem1=ne1,
         ne_problem2=ne2,
         ne_problem3=ne3,
+        unmatched_count_p3=float(unmatched_count),
+        unmatched_neighbor_count_p3=float(unmatched_nb_count),
     )
 
 
@@ -513,6 +542,8 @@ def _aggregate_trials(x_value: float, trials: list[TrialMetrics]) -> BenchmarkPo
         ne_rate_problem1=sum(1 for t in trials if t.ne_problem1) / trial_count,
         ne_rate_problem2=sum(1 for t in trials if t.ne_problem2) / trial_count,
         ne_rate_problem3=sum(1 for t in trials if t.ne_problem3) / trial_count,
+        avg_unmatched_p3=sum(t.unmatched_count_p3 for t in trials) / trial_count,
+        avg_unmatched_neighbor_p3=sum(t.unmatched_neighbor_count_p3 for t in trials) / trial_count,
     )
 
 
@@ -624,14 +655,17 @@ def print_results_table(results: list[BenchmarkPoint], x_label: str) -> None:
       valid_p{1,2}       - fraction of trials where the IDS property holds
       valid_p3 / max_p3  - fraction of valid / maximal matchings
       ne_p{1,2,3}        - fraction of trials where the result is a Nash Equilibrium
+      unmatched_p3       - average number of unmatched vertices (Problem 3)
+      unmatch_nb_p3      - average number of unmatched vertices with an unmatched neighbor
     """
-    width = 155
+    width = 185
     print("=" * width)
     print(
         f"{x_label:>8} | {'avg_card_p1':>11} {'avg_card_p2':>11} {'avg_card_p3':>11} "
         f"| {'avg_move_p1':>11} {'avg_move_p2':>11} {'avg_move_p3':>11} "
         f"| {'valid_p1':>8} {'valid_p2':>8} {'valid_p3':>8} {'max_p3':>8} "
-        f"| {'ne_p1':>8} {'ne_p2':>8} {'ne_p3':>8}"
+        f"| {'ne_p1':>8} {'ne_p2':>8} {'ne_p3':>8} "
+        f"| {'unmatched':>10} {'unmatch_nb':>10}"
     )
     print("-" * width)
 
@@ -641,10 +675,75 @@ def print_results_table(results: list[BenchmarkPoint], x_label: str) -> None:
             f"{point.avg_cardinality_problem1:11.3f} {point.avg_cardinality_problem2:11.3f} {point.avg_cardinality_problem3:11.3f} "
             f"| {point.avg_move_count_problem1:11.3f} {point.avg_move_count_problem2:11.3f} {point.avg_move_count_problem3:11.3f} "
             f"| {point.valid_rate_problem1:8.3f} {point.valid_rate_problem2:8.3f} {point.valid_rate_problem3:8.3f} {point.maximal_rate_problem3:8.3f} "
-            f"| {point.ne_rate_problem1:8.3f} {point.ne_rate_problem2:8.3f} {point.ne_rate_problem3:8.3f}"
+            f"| {point.ne_rate_problem1:8.3f} {point.ne_rate_problem2:8.3f} {point.ne_rate_problem3:8.3f} "
+            f"| {point.avg_unmatched_p3:10.3f} {point.avg_unmatched_neighbor_p3:10.3f}"
         )
 
     print("=" * width)
+
+
+def plot_maximal_rate_vs_n(results: list[BenchmarkPoint], output_path: Path) -> None:
+    """Plot maximal_rate_problem3 against n."""
+    x_values = [int(point.x_value) for point in results]
+    fig, ax = plt.subplots(figsize=(8, 5))
+    ax.plot(x_values, [point.maximal_rate_problem3 for point in results], marker="o", color="tab:orange", label="Maximal Rate (P3)")
+    ax.set_title("Maximal Rate of Problem 3 vs n")
+    ax.set_xlabel("n")
+    ax.set_ylabel("Maximal Rate")
+    ax.set_ylim(-0.05, 1.05)
+    ax.grid(alpha=0.3)
+    ax.legend()
+    fig.tight_layout()
+    fig.savefig(output_path)
+    plt.close(fig)
+
+
+def plot_maximal_rate_vs_p(results: list[BenchmarkPoint], output_path: Path) -> None:
+    """Plot maximal_rate_problem3 against p."""
+    x_values = [point.x_value for point in results]
+    fig, ax = plt.subplots(figsize=(8, 5))
+    ax.plot(x_values, [point.maximal_rate_problem3 for point in results], marker="o", color="tab:orange", label="Maximal Rate (P3)")
+    ax.set_title("Maximal Rate of Problem 3 vs p")
+    ax.set_xlabel("p (rewiring probability)")
+    ax.set_ylabel("Maximal Rate")
+    ax.set_ylim(-0.05, 1.05)
+    ax.grid(alpha=0.3)
+    ax.legend()
+    fig.tight_layout()
+    fig.savefig(output_path)
+    plt.close(fig)
+
+
+def plot_unmatched_metrics_vs_n(results: list[BenchmarkPoint], output_path: Path) -> None:
+    """Plot avg unmatched and unmatched-with-unmatched-neighbor counts against n."""
+    x_values = [int(point.x_value) for point in results]
+    fig, ax = plt.subplots(figsize=(8, 5))
+    ax.plot(x_values, [point.avg_unmatched_p3 for point in results], marker="o", color="tab:blue", label="Avg Unmatched Vertices")
+    ax.plot(x_values, [point.avg_unmatched_neighbor_p3 for point in results], marker="s", color="tab:red", label="Avg Unmatched w/ Unmatched Neighbor")
+    ax.set_title("Unmatched Vertices (Problem 3) vs n")
+    ax.set_xlabel("n")
+    ax.set_ylabel("Average Count")
+    ax.grid(alpha=0.3)
+    ax.legend()
+    fig.tight_layout()
+    fig.savefig(output_path)
+    plt.close(fig)
+
+
+def plot_unmatched_metrics_vs_p(results: list[BenchmarkPoint], output_path: Path) -> None:
+    """Plot avg unmatched and unmatched-with-unmatched-neighbor counts against p."""
+    x_values = [point.x_value for point in results]
+    fig, ax = plt.subplots(figsize=(8, 5))
+    ax.plot(x_values, [point.avg_unmatched_p3 for point in results], marker="o", color="tab:blue", label="Avg Unmatched Vertices")
+    ax.plot(x_values, [point.avg_unmatched_neighbor_p3 for point in results], marker="s", color="tab:red", label="Avg Unmatched w/ Unmatched Neighbor")
+    ax.set_title("Unmatched Vertices (Problem 3) vs p")
+    ax.set_xlabel("p (rewiring probability)")
+    ax.set_ylabel("Average Count")
+    ax.grid(alpha=0.3)
+    ax.legend()
+    fig.tight_layout()
+    fig.savefig(output_path)
+    plt.close(fig)
 
 
 def parse_args() -> argparse.Namespace:
@@ -722,9 +821,13 @@ def main() -> None:
 
         plot_avg_cardinality_vs_n(results, output_dir / "avg_cardinality_vs_n.png")
         plot_avg_move_count_vs_n(results, output_dir / "avg_move_count_vs_n.png")
+        plot_maximal_rate_vs_n(results, output_dir / "maximal_rate_vs_n.png")
+        plot_unmatched_metrics_vs_n(results, output_dir / "unmatched_metrics_vs_n.png")
 
         print(f"Saved plot: {output_dir / 'avg_cardinality_vs_n.png'}")
         print(f"Saved plot: {output_dir / 'avg_move_count_vs_n.png'}")
+        print(f"Saved plot: {output_dir / 'maximal_rate_vs_n.png'}")
+        print(f"Saved plot: {output_dir / 'unmatched_metrics_vs_n.png'}")
 
     else:
         p_values = sorted(args.p_values)
@@ -740,7 +843,12 @@ def main() -> None:
         print_results_table(results, x_label="p")
 
         plot_avg_cardinality_vs_p(results, output_dir / "avg_cardinality_vs_p.png")
+        plot_maximal_rate_vs_p(results, output_dir / "maximal_rate_vs_p.png")
+        plot_unmatched_metrics_vs_p(results, output_dir / "unmatched_metrics_vs_p.png")
+
         print(f"Saved plot: {output_dir / 'avg_cardinality_vs_p.png'}")
+        print(f"Saved plot: {output_dir / 'maximal_rate_vs_p.png'}")
+        print(f"Saved plot: {output_dir / 'unmatched_metrics_vs_p.png'}")
 
 
 if __name__ == "__main__":
