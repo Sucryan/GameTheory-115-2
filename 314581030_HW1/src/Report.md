@@ -116,7 +116,7 @@ $u_i(C)=c_i\left(1-\alpha \sum_{j\in L_i} c_j\right),\quad \alpha>1$
 ### (3) Dynamics 與 multi-start
 
 本題採用 asynchronous best-response dynamics。
-實作上，我會先給定一個 initial state，接著找出所有目前狀態不等於 best response 的節點，再從中隨機選出一個玩家更新狀態。此過程持續進行，直到無人想改變策略，或者超過步數上限。
+實作上，我會先給定一個 initial state，接著找出所有目前狀態不等於 best response 的節點，再從中隨機選出一個玩家更新狀態。此過程持續進行，直到無人想改變策略，或者超過步數上限 （理論上不會超過，但是就當作保險）。
 
 由於不同 initial state 與 tie-breaking 可能收斂到不同結果，因此我採用了 multi-start 的做法，包括：
 
