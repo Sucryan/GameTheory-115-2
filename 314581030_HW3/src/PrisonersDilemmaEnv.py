@@ -27,7 +27,7 @@ class PrisonersDilemmaEnv(gym.Env):
         self.action_space = spaces.Discrete(2)
         
         # [Protagonist_last, Opponent_last]
-        self.observation_space = spaces.Box(low=-1, high=1, shape=(2,), dtype=int)
+        self.observation_space = spaces.Box(low=-1, high=1, shape=(2,), dtype=np.int64)
         
         # Reward function (Protagonist, Opponent)
         self.payoff_matrix = np.array([
@@ -35,13 +35,13 @@ class PrisonersDilemmaEnv(gym.Env):
             [( 12, 4), (6, 6)]
         ])
 
-        self.state = np.array([-1, -1])
+        self.state = np.array([-1, -1], dtype=np.int64)
         self.reward_range = (4.0, 12.0)
 
     def reset(self, seed=None, options=None):
         super().reset(seed=seed)
         self.current_step = 0
-        self.state = np.array([-1, -1])
+        self.state = np.array([-1, -1], dtype=np.int64)
         return self.state, {}
 
     def _get_opponent_action(self, agent_action):
@@ -74,6 +74,7 @@ class PrisonersDilemmaEnv(gym.Env):
         # print(f"a2 action: {opponent_action}")
 
         action_int = int(action)
+        opponent_action = int(opponent_action)
         
         # 2. Obtain rewards
         agent_reward, opponent_reward = self.payoff_matrix[action_int, opponent_action]
@@ -86,7 +87,7 @@ class PrisonersDilemmaEnv(gym.Env):
         }
         
         # Renew state with current actions
-        self.state = np.array([action, opponent_action])
+        self.state = np.array([action_int, opponent_action], dtype=np.int64)
         self.current_step += 1
         
         # 4. Epoch termination condition

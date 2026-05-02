@@ -68,7 +68,7 @@ class RLAgent(BaseAgent):
         exploration_final_eps=0.05,
         seed=None,
         device="auto",
-        use_sb3=True,
+        use_sb3=False,
     ):
         super().__init__(env, total_episodes)
         self.max_steps = getattr(env, "max_steps", 100)
@@ -86,7 +86,12 @@ class RLAgent(BaseAgent):
         self.seed = seed
         self.device = device
 
-        if use_sb3 and SB3_AVAILABLE:
+        if use_sb3:
+            if not SB3_AVAILABLE:
+                raise RuntimeError(
+                    "stable_baselines3 was requested but is not available. "
+                    f"SB3 import error: {SB3_IMPORT_ERROR}"
+                )
             self.backend = "sb3"
             self._init_sb3_model()
         else:
@@ -115,6 +120,17 @@ class RLAgent(BaseAgent):
         )
         self.model._total_timesteps = self.total_timesteps
         self.model.exploration_rate = self.exploration_initial_eps
+
+    def learn(self, total_timesteps=None, **kwargs):
+        if self.backend != "sb3":
+            raise RuntimeError(
+                "learn() is only for the optional SB3 backend. "
+                "The default torch backend learns through update()."
+            )
+
+        timesteps = self.total_timesteps if total_timesteps is None else int(total_timesteps)
+        kwargs.setdefault("reset_num_timesteps", False)
+        return self.model.learn(total_timesteps=timesteps, **kwargs)
 
     def _init_torch_model(self):
         if not TORCH_AVAILABLE:
@@ -165,40 +181,13 @@ class RLAgent(BaseAgent):
             self._update_torch(obs, action, reward, next_obs, done)
 
     def _update_sb3(self, obs, action, reward, next_obs, done):
-        obs_arr = np.asarray(obs, dtype=self.env.observation_space.dtype).reshape(
-            (1,) + self.env.observation_space.shape
+        raise RuntimeError(
+            "The optional SB3 backend uses the public model.learn() API and "
+            "cannot be updated from externally supplied one-step transitions "
+            "without making SB3 step the environment again. Use the default "
+            "torch backend with main.py, or call learn() in a separate SB3 "
+            "training flow."
         )
-        next_obs_arr = np.asarray(next_obs, dtype=self.env.observation_space.dtype).reshape(
-            (1,) + self.env.observation_space.shape
-        )
-        action_arr = np.array([[int(action)]], dtype=np.int64)
-        reward_arr = np.array([float(reward)], dtype=np.float32)
-        done_arr = np.array([bool(done)], dtype=bool)
-
-        self.model.replay_buffer.add(
-            obs_arr,
-            next_obs_arr,
-            action_arr,
-            reward_arr,
-            done_arr,
-            [{}],
-        )
-
-        self.model.num_timesteps += 1
-        self.model._update_current_progress_remaining(
-            self.model.num_timesteps,
-            self.total_timesteps,
-        )
-        self.model._on_step()
-
-        if (
-            self.model.num_timesteps > self.learning_starts
-            and self.model.replay_buffer.size() >= self.batch_size
-        ):
-            self.model.train(
-                gradient_steps=self.gradient_steps,
-                batch_size=self.batch_size,
-            )
 
     def _update_torch(self, obs, action, reward, next_obs, done):
         self.replay_buffer.append(
