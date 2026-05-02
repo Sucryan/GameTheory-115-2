@@ -48,15 +48,18 @@ class LAAgent(BaseAgent):
         # How to determine beta for pure_binary version or continuous version:
         # For pure_binary version, we use the running average of rewards (R_bar) to determine success or failure
         # For continuous version, we use the min and max payoff to determine beta
-        beta = 
+        # 和GPT討論：我本來以為必須取Observation下的min,max，但從上文語意下推測助教的意思是取matrix中的min/max，故以此寫法。
+        r_min, r_max = self.env.reward_range
+        beta = (reward - r_min) / (r_max - r_min)
+        beta = np.clip(beta, 0.0, 1.0)
 
         # L_RP/L_RI Update Rule
         if action == 0: 
             # Selected cooperation (silent), update p_C accordingly
-            self.p_C = 
+            self.p_C = self.p_C + self.alpha * beta * (1 - self.p_C) - self.rho * (1 - beta) * self.p_C
         else:
             # Selected betrayal, how to update p_C?
-
+            self.p_C = (1.0 - self.alpha * beta) * self.p_C - self.rho * (1.0 - beta) * self.p_C + self.rho * (1.0 - beta)
 
         # clip p_C to [0, 1] to ensure it's a valid probability
         self.p_C = np.clip(self.p_C, 0.0, 1.0)

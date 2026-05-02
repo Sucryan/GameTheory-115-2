@@ -9,9 +9,10 @@ from RandomAgent import RandomAgent
 
 
 # Please uncomment the following lines when you have completed LAAgent
-# from LAAgent import LAAgent
+from LAAgent import LAAgent
 # You might also need to import your RL agent and import 
 # import statements for your RL agent here
+from RLAgent import RLAgent
 
 
 def run_simulation(env, agent, episodes=300, is_eval=False):
@@ -63,26 +64,25 @@ if __name__ == "__main__":
 
         print("=== Start Training ===")
         agent_rand = RandomAgent(env, total_episodes=TRAIN_EPISODES)
-
         # Initialize your RL agent here, e.g. agent_rl = YourRLAgent(env, total_episodes=TRAIN_EPISODES)
-        agent_rl = None
+        agent_rl = RLAgent(env, total_episodes=TRAIN_EPISODES, seed=fix_seed)
         # Remove None and uncomment the following line to initialize your LA agent
-        agent_la =None # LAAgent(env, total_episodes=TRAIN_EPISODES, rho=0.05)
+        agent_la = LAAgent(env, total_episodes=TRAIN_EPISODES, rho=0.05)
         
         train_rewards_rand = run_simulation(env, agent_rand, TRAIN_EPISODES, is_eval=False)
         # Remove None and execute your RL agent to train and obtain rewards
-        train_rewards_rl = None 
+        train_rewards_rl = run_simulation(env, agent_rl, TRAIN_EPISODES, is_eval=False)
         # Remove None and uncomment the following line to let your LA agent learn and collect rewards
-        train_rewards_la = None # run_simulation(env, agent_la, TRAIN_EPISODES, is_eval=False)
+        train_rewards_la = run_simulation(env, agent_la, TRAIN_EPISODES, is_eval=False)
         
 
 
         print("=== Start Evaluation ===")
         eval_rewards_rand = run_simulation(env, agent_rand, EVAL_EPISODES, is_eval=True)
         # Remove None and uncomment the following line for your RL agent to evaluate and obtain rewards via the same eval loop
-        eval_rewards_rl = None # run_simulation(env, agent_rl, EVAL_EPISODES, is_eval=True)
+        eval_rewards_rl = run_simulation(env, agent_rl, EVAL_EPISODES, is_eval=True)
         # Remove None and uncomment the following line to evaluate your LA agent via the same eval loop
-        eval_rewards_la = None # run_simulation(env, agent_la, EVAL_EPISODES, is_eval=True)
+        eval_rewards_la = run_simulation(env, agent_la, EVAL_EPISODES, is_eval=True)
 
         
         print("=== Plotting Graphs ===")
