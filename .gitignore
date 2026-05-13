@@ -3,3 +3,7 @@
 314581030_HW3/**/__pycache__
 **/*.png
 314581030_HW3/HW3_src_code_review_report.md
+*/*.DS_Store
+.DS_Store
+*/*.zip
+314581030_HW4/src/*.csv
